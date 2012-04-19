@@ -23,6 +23,15 @@ data Downloadable = DL
              }
            deriving (Show, Eq)
 
+main :: IO ()
+main = do
+    url <- fmap head getArgs
+    withManager $ \manager -> do
+        liftIO . putStrLn $ "Downloading " ++ url
+        mvars <- download url 4 manager
+        mapM (liftIO . takeMVar) mvars
+        liftIO $ putStrLn "Downloaded"
+
 mkDownloadable url cn manager = do
     initReq <- parseUrl url
     let req = initReq { method = "HEAD" }
@@ -33,16 +42,7 @@ mkDownloadable url cn manager = do
     return $ DL url filename ranges
 
 mkRanges "-1" _ = Nothing
-mkRanges size cn = return $ chunks (read . CB.unpack $ size) cn
-
-main :: IO ()
-main = do
---    url <- fmap head getArgs
-    withManager $ \manager -> do
-        download url 4 manager
-
-        forever $ do
-            threadDelay $ 1000 * 10
+mkRanges size cn = return $ ranges (read . CB.unpack $ size) cn
 
 mkReq url (s, f) = do
     initReq <- parseUrl url
@@ -57,15 +57,23 @@ mkReqs (DL url _ (Just ranges)) = mapM (mkReq url) ranges
 
 download url cn manager = do
     dl@(DL url filename ranges) <- mkDownloadable url cn manager
+    mvars <- liftIO $ replicateM cn newEmptyMVar
     let reqs = mkReqs dl
-    mapM_ (\(req,fp) -> fork $ do
+    mapM_ (\(req,fp,mvar) -> fork $ do
             Response _ _ _ bsrc <- http req manager
-            bsrc C.$$ sinkFile $ CB.unpack filename++fp) $
-        zip (join reqs) [".part" ++ (show x) | x <- [1..]]
+            bsrc C.$$ sinkFile $ CB.unpack filename++fp
+            putMVar mvar True) $
+        zip3 (join reqs)
+        [".part" ++ (show x) | x <- [1..]]
+        mvars
+    return mvars
 
-chunks n cn = cl n cs cn 0 0
+ranges n cn = cl n cs cn 0 0
   where
     cs = n `div` cn
 
-cl n cs cn p t | (cn-1) == t = [((show p), (show n))]
-               | otherwise = ((show p), (show $ cs+p)) : cl n cs cn (cs+p+1) (t+1)
+cl n cs cn p t | (cn-1) == t = [(sp, sn)]
+               | otherwise = (sp, (show $ cs+p)) : cl n cs cn (cs+p+1) (t+1)
+  where
+    sp = (show p)
+    sn = (show n)
