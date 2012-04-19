@@ -1,6 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE FlexibleContexts #-}
 
-import Data.Conduit.Binary (sinkFile)
+import Data.Conduit
+import Data.Conduit.Binary (sinkFile, conduitFile)
 import Network.HTTP.Conduit
 import Network.HTTP.Types
 import qualified Data.Conduit as C
@@ -9,12 +11,11 @@ import qualified Data.ByteString.Char8 as CB
 import Control.Monad
 import Control.Monad.Trans
 import qualified Data.CaseInsensitive as CI
+import Control.Concurrent (forkIO)
 import Control.Concurrent.Lifted
+import Control.Concurrent.SampleVar
 import System
-
---url = "http://ftp.unina.it/pub/linux/distributions/ubuntu-releases//oneiric/ubuntu-11.10-desktop-i386.iso"
-
-url = "http://www.narutoplanet.it/wp-content/uploads/downloads/2012/04/naruto-capitolo-582.zip"
+import System.IO
 
 data Downloadable = DL
              { dlUrl :: String
@@ -28,7 +29,17 @@ main = do
     url <- fmap head getArgs
     withManager $ \manager -> do
         liftIO . putStrLn $ "Downloading " ++ url
-        mvars <- download url 4 manager
+        sinfo <- liftIO $ newSampleVar 0
+        mvars <- download url 5 manager sinfo
+
+        liftIO . forkIO . forever $ do
+            rb <- readSampleVar sinfo
+            if rb >= 14581350
+                then liftIO $ putStr "#" >> hFlush stdout >>
+                     (liftIO $ writeSampleVar sinfo 0)
+                else liftIO $ writeSampleVar sinfo rb
+            threadDelay 500
+
         mapM (liftIO . takeMVar) mvars
         liftIO $ putStrLn "Downloaded"
 
@@ -55,13 +66,13 @@ mkReq url (s, f) = do
 mkReqs (DL url _ Nothing) = return $ parseUrl url
 mkReqs (DL url _ (Just ranges)) = mapM (mkReq url) ranges
 
-download url cn manager = do
+download url cn manager sinfo = do
     dl@(DL url filename ranges) <- mkDownloadable url cn manager
     mvars <- liftIO $ replicateM cn newEmptyMVar
     let reqs = mkReqs dl
     mapM_ (\(req,fp,mvar) -> fork $ do
             Response _ _ _ bsrc <- http req manager
-            bsrc C.$$ sinkFile $ CB.unpack filename++fp
+            bsrc C.$= (conduitInfo sinfo) C.$$ (sinkFile $ CB.unpack filename++fp)
             putMVar mvar True) $
         zip3 (join reqs)
         [".part" ++ (show x) | x <- [1..]]
@@ -71,6 +82,19 @@ download url cn manager = do
 ranges n cn = cl n cs cn 0 0
   where
     cs = n `div` cn
+
+conduitInfo :: MonadResource m
+               => SampleVar Int -> Conduit B.ByteString m B.ByteString
+conduitInfo sinfo = conduitIO
+              (return ())
+              (const $ return ())
+              (\_ bs -> do
+                    rb <- liftIO $ readSampleVar sinfo
+                    let r = B.length bs
+                    liftIO $ writeSampleVar sinfo (r + rb)
+                    return $ IOProducing [bs])
+              (const $ return [])
+
 
 cl n cs cn p t | (cn-1) == t = [(sp, sn)]
                | otherwise = (sp, (show $ cs+p)) : cl n cs cn (cs+p+1) (t+1)
