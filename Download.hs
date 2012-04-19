@@ -25,7 +25,7 @@ main = do
         let (Just size) = lookup (CI.mk "content-length") hdrs
         let cks = chunks (read . CB.unpack $ size) 4
 
-        mapM_ (\(range,fp) -> download url fp range manager)
+        mapM_ (\(range,fp) -> fork $ download url fp range manager)
             $ zip cks [(show x) ++ ".data" | x <- [1..]]
 
         forever $ do
@@ -44,7 +44,7 @@ mkReq url (s, f) = do
 download url fp range manager = do
     req <- mkReq url range
     Response _ _ _ bsrc <- http req manager
-    fork $ bsrc C.$$ sinkFile fp
+    bsrc C.$$ sinkFile fp
 
 chunks n cn = cl n cs cn 0 0
   where
