@@ -5,16 +5,21 @@ Multipart threaded file downloader with counduits
 
 ## Features
 * Multipart threaded download
+* Use conduits to not abuse memory
+* Neat progressbar
 
+## Installation
+
+	git clone git@github.com:ga2arch/hs-downloader.git
+	cd hs-downloader
+	cabal install --prefix=$HOME --user
+	
+Now there will be an executable called **hdownload** in your home's bin.
 
 ## Usage
 
-	runhaskell Download.hs <url>
+	hdownload <url>
 	
-
-This will start 5 threads each downloading a range of bytes.  
-When all the parts will be downloaded, the 5 part files will be joined in a final one.
-
 ## TODO
 * Handle Exceptions
 * Command line arguments
