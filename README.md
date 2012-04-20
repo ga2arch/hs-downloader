@@ -3,6 +3,10 @@ hs-downloader
 
 Multipart threaded file downloader with counduits
 
+## Features
+* Multipart threaded download
+
+
 ## Usage
 
 	runhaskell Download.hs <url>

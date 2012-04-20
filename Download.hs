@@ -12,7 +12,6 @@ import Control.Monad.Trans
 import qualified Data.CaseInsensitive as CI
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Lifted
-import Control.Concurrent.SampleVar
 import System
 import System.IO
 import System.Directory
@@ -33,7 +32,7 @@ main = do
     withManager $ \manager -> do
         dl <- mkDownloadable url 5 manager
         liftIO . putStrLn $ "Downloading " ++ url
-        sinfo <- liftIO $ newSampleVar 0
+        sinfo <- liftIO $ newMVar 0
         download dl manager sinfo
         liftIO $ progress 40 sinfo (dlSize dl)
         liftIO $ putStrLn "\nDownloaded"
@@ -42,10 +41,9 @@ main = do
         liftIO $ filesJoin filename 5
         return ()
 
-progress :: Int -> SampleVar Int -> Int -> IO ()
+progress :: Int -> MVar Int -> Int -> IO ()
 progress width sinfo size = do
-    rb <- readSampleVar sinfo
-    writeSampleVar sinfo rb
+    rb <- readMVar sinfo
     putStr $ mkProgressBar "Downloading" width size rb ++ "\r"
     if rb /= size
         then threadDelay 500 >> progress width sinfo size
@@ -101,14 +99,13 @@ ranges n cn = cl n cs cn 0 0
     cs = n `div` cn
 
 conduitInfo :: C.MonadResource m
-               => SampleVar Int -> C.Conduit B.ByteString m B.ByteString
+               => MVar Int -> C.Conduit B.ByteString m B.ByteString
 conduitInfo env = C.conduitIO
               (return ())
               (const $ return ())
               (\_ bs -> do
-                    rb <- liftIO $ readSampleVar env
-                    let r = B.length bs
-                    liftIO $ writeSampleVar env (r + rb)
+                    liftIO . modifyMVar_ env $ \rb -> do
+                        return $ rb + (CB.length bs)
                     return $ C.IOProducing [bs])
               (const $ return [])
 
