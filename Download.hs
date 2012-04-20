@@ -1,6 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Data.Conduit.Binary (sinkFile, conduitFile)
 import Network.HTTP.Conduit
 import Network.HTTP.Types
 import qualified Data.Conduit as C
@@ -12,10 +11,12 @@ import Control.Monad.Trans
 import qualified Data.CaseInsensitive as CI
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Lifted
+import Control.Concurrent.Chan
 import System
 import System.IO
 import System.Directory
 import Text.Printf
+import Data.Maybe
 
 data Downloadable = DL
              { dlUrl :: String
@@ -33,21 +34,14 @@ main = do
         dl <- mkDownloadable url 5 manager
         liftIO . putStrLn $ "Downloading " ++ url
         sinfo <- liftIO $ newMVar 0
-        download dl manager sinfo
-        liftIO $ progress 40 sinfo (dlSize dl)
+
+        chan <- liftIO $ newChan
+        download dl chan manager sinfo
+        h <- liftIO $ openFile (CB.unpack $ dlFilename dl) WriteMode
+        liftIO $ hSetBuffering h NoBuffering
+        liftIO $ fileWriter h chan dl 0 0
         liftIO $ putStrLn "\nDownloaded"
-
-        let filename = CB.unpack $ dlFilename dl
-        liftIO $ filesJoin filename 5
         return ()
-
-progress :: Int -> MVar Int -> Int -> IO ()
-progress width sinfo size = do
-    rb <- readMVar sinfo
-    putStr $ mkProgressBar "Downloading" width size rb ++ "\r"
-    if rb /= size
-        then threadDelay (1000000 `div` 10) >> progress width sinfo size
-        else return ()
 
 mkProgressBar :: String -> Int -> Int -> Int -> String
 mkProgressBar msg width filesize rbytes =
@@ -84,15 +78,6 @@ mkReq url (s, f) = do
 mkReqs (DL url _ _ Nothing) = return $ parseUrl url
 mkReqs (DL url _ _ (Just ranges)) = mapM (mkReq url) ranges
 
-download dl manager env = do
-    reqs <- mkReqs dl
-    mapM_ (\(req,fp) -> fork $ do
-            Response _ _ _ bsrc <- http req manager
-            bsrc C.$= (conduitInfo env)
-                 C.$$ (sinkFile $ CB.unpack (dlFilename dl)++fp)) $
-        zip reqs
-        [".part" ++ (show x) | x <- [1..]]
-
 ranges :: Int -> Int -> [(String, String)]
 ranges n cn = cl n cs cn 0 0
   where
@@ -109,7 +94,6 @@ conduitInfo env = C.conduitIO
                     return $ C.IOProducing [bs])
               (const $ return [])
 
-
 cl :: Int -> Int -> Int -> Int -> Int -> [(String, String)]
 cl n cs cn p t | (cn-1) == t = [(sp, sn)]
                | otherwise = (sp, (show $ cs+p)) : cl n cs cn (cs+p+1) (t+1)
@@ -117,11 +101,45 @@ cl n cs cn p t | (cn-1) == t = [(sp, sn)]
     sp = (show p)
     sn = (show n)
 
+sinkFile filesize r chan = C.sinkIO
+              (newMVar r)
+              (const $ return ())
+              (\m bs -> do
+                    rb <- liftIO $ takeMVar m
+                    let nrb = rb + (CB.length bs)
+                    liftIO $ writeChan chan (toInteger rb, bs)
+                    if nrb /= filesize
+                        then (liftIO $ putMVar m nrb)
+                             >> return C.IOProcessing
+                        else return $ C.IODone Nothing ())
+              (const $ return ())
 
-filesJoin :: String -> Int -> IO ()
-filesJoin filename partsNum = do
-    files <- sequence . map BL.readFile $ parts
-    BL.writeFile filename $ BL.concat files
-    mapM_ removeFile parts
-  where
-    parts = [filename ++ ".part" ++ (show x) | x <- [1..partsNum]]
+download dl chan manager env = do
+    reqs <- mkReqs dl
+    mapM_ (\(req,fp,(r,_)) -> fork $ do
+            Response _ _ _ bsrc <- http req manager
+            bsrc C.$$ sinkFile (dlSize dl) (read r) chan) $
+        zip3 reqs
+        [".part" ++ (show x) | x <- [1..]]
+        (fromJust $ dlRanges dl)
+
+fileWriter h chan dl@(DL _ _ fsize _) total rbytes = do
+    (pos, bs) <- readChan chan
+    hSeek h AbsoluteSeek pos
+    CB.hPut h bs
+
+    let nbytes = CB.length bs
+    let ntotal = total + nbytes
+
+    let nrbytes = if rbytes >= (fsize `div` 40)
+                  then 0
+                  else rbytes + nbytes
+
+    if nrbytes == 0
+        then putStr $ mkProgressBar "Downloading" 40 fsize ntotal ++ "\r"
+        else return ()
+
+    if ntotal == fsize
+        then (putStr $ mkProgressBar "Downloading" 40 fsize ntotal ++ "\r")
+             >> (hClose h) >> return ()
+        else fileWriter h chan dl ntotal nrbytes
