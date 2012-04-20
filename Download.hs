@@ -1,61 +1,67 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-
+Copyright (c) 2011 Gabriele Carrettoni <gabriele.carrettoni@gmail.com>
 
-import Network.HTTP.Conduit
-import Network.HTTP.Types
-import qualified Data.Conduit as C
-import qualified Data.ByteString as B
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.ByteString.Char8 as CB
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+-}
+
+
+{-# LANGUAGE OverloadedStrings #-}
+module Download
+       (downloadUrl
+       ) where
+
 import Control.Monad
 import Control.Monad.Trans
-import qualified Data.CaseInsensitive as CI
 import Control.Concurrent (forkIO)
 import Control.Concurrent.Lifted
 import Control.Concurrent.Chan
-import System
+import Network.HTTP.Conduit
+import Network.HTTP.Types
 import System.IO
 import System.Directory
 import Text.Printf
 import Data.Maybe
 
-data Downloadable = DL
-             { dlUrl :: String
-             , dlFilename :: CB.ByteString
-             , dlSize :: Int
-             , dlRanges :: Maybe [(String, String)]
-             }
-           deriving (Show, Eq)
+import qualified Data.Conduit as C
+import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
+import qualified Data.ByteString.Char8 as CB
+import qualified Data.CaseInsensitive as CI
 
-main :: IO ()
-main = do
-    hSetBuffering stdout NoBuffering
-    url <- fmap head getArgs
-    withManager $ \manager -> do
-        dl <- mkDownloadable url 5 manager
-        liftIO . putStrLn $ "Downloading " ++ url
-        sinfo <- liftIO $ newMVar 0
+import Types
+import ProgressBar
 
-        chan <- liftIO $ newChan
-        download dl chan manager sinfo
-        h <- liftIO $ openFile (CB.unpack $ dlFilename dl) WriteMode
-        liftIO $ hSetBuffering h NoBuffering
+downloadUrl url = withManager $ \manager -> do
+    dl <- mkDownloadable url 5 manager
+    liftIO . putStrLn $ "Downloading " ++ url
+    sinfo <- liftIO $ newMVar 0
 
-        liftIO $ putStr $ mkProgressBar "Downloading" 40 (dlSize dl) 0 ++ "\r"
+    chan <- liftIO $ newChan
+    download dl chan manager sinfo
+    h <- liftIO $ openFile (CB.unpack $ dlFilename dl) WriteMode
+    liftIO $ hSetBuffering h NoBuffering
 
-        liftIO $ fileWriter h chan dl 0 0
-        liftIO $ putStrLn "\nDownloaded"
-        return ()
+    liftIO $ putStr $ mkProgressBar "Downloading" 40 (dlSize dl) 0 ++ "\r"
 
-mkProgressBar :: String -> Int -> Int -> Int -> String
-mkProgressBar msg width filesize rbytes =
-    printf "%s [%s%s] %d%%" msg bar spaces percentage
-  where
-    bar = replicate completed '#'
-    spaces = replicate (width - completed) ' '
-    percentage = completed * 100 `div` width
-    completed = if rbytes /= filesize
-                then rbytes * width `div` filesize
-                else width
+    liftIO $ fileWriter h chan dl 0 0
+    liftIO $ putStrLn "\nDownloaded"
+    return ()
 
 mkDownloadable url cn manager = do
     initReq <- parseUrl url
@@ -85,17 +91,6 @@ ranges :: Int -> Int -> [(String, String)]
 ranges n cn = cl n cs cn 0 0
   where
     cs = n `div` cn
-
-conduitInfo :: C.MonadResource m
-               => MVar Int -> C.Conduit B.ByteString m B.ByteString
-conduitInfo env = C.conduitIO
-              (return ())
-              (const $ return ())
-              (\_ bs -> do
-                    liftIO . modifyMVar_ env $ \rb -> do
-                        return $ rb + (CB.length bs)
-                    return $ C.IOProducing [bs])
-              (const $ return [])
 
 cl :: Int -> Int -> Int -> Int -> Int -> [(String, String)]
 cl n cs cn p t | (cn-1) == t = [(sp, sn)]
