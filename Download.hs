@@ -46,7 +46,7 @@ progress width sinfo size = do
     rb <- readMVar sinfo
     putStr $ mkProgressBar "Downloading" width size rb ++ "\r"
     if rb /= size
-        then threadDelay 500 >> progress width sinfo size
+        then threadDelay (1000000 `div` 10) >> progress width sinfo size
         else return ()
 
 mkProgressBar :: String -> Int -> Int -> Int -> String
