@@ -96,18 +96,19 @@ cl n cs cn p t | (cn-1) == t = [(sp, sn)]
     sp = show p
     sn = show n
 
-sinkFile filesize r chan = C.sinkIO
-              (newMVar r)
-              (const $ return ())
-              (\m bs -> do
-                    rb <- liftIO $ takeMVar m
-                    let nrb = rb + CB.length bs
-                    liftIO $ writeChan chan (toInteger rb, bs)
-                    if nrb /= filesize
-                        then liftIO (putMVar m nrb)
-                             >> return C.IOProcessing
-                        else return $ C.IODone Nothing ())
-              (const $ return ())
+sinkFile filesize r chan =
+    C.sinkIO
+    (newMVar r)
+    (const $ return ())
+    (\m bs -> do
+          rb <- liftIO $ takeMVar m
+          let nrb = rb + CB.length bs
+          liftIO $ writeChan chan (toInteger rb, bs)
+          if nrb /= filesize
+              then liftIO (putMVar m nrb)
+                   >> return C.IOProcessing
+              else return $ C.IODone Nothing ())
+    (const $ return ())
 
 download dl chan manager = do
     reqs <- mkReqs dl
