@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-import Data.Conduit
 import Data.Conduit.Binary (sinkFile, conduitFile)
 import Network.HTTP.Conduit
 import Network.HTTP.Types
 import qualified Data.Conduit as C
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Lazy as BL
 import qualified Data.ByteString.Char8 as CB
 import Control.Monad
 import Control.Monad.Trans
@@ -15,6 +15,7 @@ import Control.Concurrent.Lifted
 import Control.Concurrent.SampleVar
 import System
 import System.IO
+import System.Directory
 import Text.Printf
 
 data Downloadable = DL
@@ -28,22 +29,26 @@ data Downloadable = DL
 main :: IO ()
 main = do
     hSetBuffering stdout NoBuffering
-
     url <- fmap head getArgs
     withManager $ \manager -> do
+        dl <- mkDownloadable url 5 manager
         liftIO . putStrLn $ "Downloading " ++ url
         sinfo <- liftIO $ newSampleVar 0
-        size <- download url 5 manager sinfo
-        liftIO $ progress sinfo size
+        download dl manager sinfo
+        liftIO $ progress 40 sinfo (dlSize dl)
         liftIO $ putStrLn "\nDownloaded"
+
+        let filename = CB.unpack $ dlFilename dl
+        liftIO $ filesJoin filename 5
         return ()
 
-progress sinfo size = do
+progress :: Int -> SampleVar Int -> Int -> IO ()
+progress width sinfo size = do
     rb <- readSampleVar sinfo
     writeSampleVar sinfo rb
-    putStr $ mkProgressBar "Downloading" 25 size rb ++ "\r"
+    putStr $ mkProgressBar "Downloading" width size rb ++ "\r"
     if rb /= size
-        then threadDelay 500 >> progress sinfo size
+        then threadDelay 500 >> progress width sinfo size
         else return ()
 
 mkProgressBar :: String -> Int -> Int -> Int -> String
@@ -66,6 +71,7 @@ mkDownloadable url cn manager = do
     let filename = last . CB.split '/' . path $ req
     return $ DL url filename (read $ CB.unpack size) ranges
 
+mkRanges :: CB.ByteString -> Int -> Maybe [(String, String)]
 mkRanges "-1" _ = Nothing
 mkRanges size cn = return $ ranges (read . CB.unpack $ size) cn
 
@@ -80,36 +86,45 @@ mkReq url (s, f) = do
 mkReqs (DL url _ _ Nothing) = return $ parseUrl url
 mkReqs (DL url _ _ (Just ranges)) = mapM (mkReq url) ranges
 
-download url cn manager sinfo = do
-    dl@(DL url filename size ranges) <- mkDownloadable url cn manager
+download dl manager env = do
     reqs <- mkReqs dl
     mapM_ (\(req,fp) -> fork $ do
             Response _ _ _ bsrc <- http req manager
-            bsrc C.$= (conduitInfo sinfo) C.$$ (sinkFile $ CB.unpack filename++fp)
-            ) $
+            bsrc C.$= (conduitInfo env)
+                 C.$$ (sinkFile $ CB.unpack (dlFilename dl)++fp)) $
         zip reqs
         [".part" ++ (show x) | x <- [1..]]
-    return size
 
+ranges :: Int -> Int -> [(String, String)]
 ranges n cn = cl n cs cn 0 0
   where
     cs = n `div` cn
 
-conduitInfo :: MonadResource m
-               => SampleVar Int -> Conduit B.ByteString m B.ByteString
-conduitInfo sinfo = conduitIO
+conduitInfo :: C.MonadResource m
+               => SampleVar Int -> C.Conduit B.ByteString m B.ByteString
+conduitInfo env = C.conduitIO
               (return ())
               (const $ return ())
               (\_ bs -> do
-                    rb <- liftIO $ readSampleVar sinfo
+                    rb <- liftIO $ readSampleVar env
                     let r = B.length bs
-                    liftIO $ writeSampleVar sinfo (r + rb)
-                    return $ IOProducing [bs])
+                    liftIO $ writeSampleVar env (r + rb)
+                    return $ C.IOProducing [bs])
               (const $ return [])
 
 
+cl :: Int -> Int -> Int -> Int -> Int -> [(String, String)]
 cl n cs cn p t | (cn-1) == t = [(sp, sn)]
                | otherwise = (sp, (show $ cs+p)) : cl n cs cn (cs+p+1) (t+1)
   where
     sp = (show p)
     sn = (show n)
+
+
+filesJoin :: String -> Int -> IO ()
+filesJoin filename partsNum = do
+    files <- sequence . map BL.readFile $ parts
+    BL.writeFile filename $ BL.concat files
+    mapM_ removeFile parts
+  where
+    parts = [filename ++ ".part" ++ (show x) | x <- [1..partsNum]]
