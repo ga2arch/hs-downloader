@@ -15,6 +15,7 @@ import Control.Concurrent.Lifted
 import Control.Concurrent.SampleVar
 import System
 import System.IO
+import Text.Printf
 
 data Downloadable = DL
              { dlUrl :: String
@@ -32,28 +33,29 @@ main = do
     withManager $ \manager -> do
         liftIO . putStrLn $ "Downloading " ++ url
         sinfo <- liftIO $ newSampleVar 0
-        (mvars,size) <- download url 5 manager sinfo
-
-        liftIO . forkIO . info sinfo $ size
-
-        mapM (liftIO . takeMVar) mvars
+        size <- download url 5 manager sinfo
+        liftIO $ progress sinfo size
+        liftIO $ putStrLn "\nDownloaded"
         return ()
 
-info sinfo size = forever $ do
+progress sinfo size = do
     rb <- readSampleVar sinfo
-    let n = rb * 25 `div` size
-    if rb == size
-        then putStr $ mkProgressBar 25 25 ++ "\n"
-        else putStr $ mkProgressBar n 25
     writeSampleVar sinfo rb
-    threadDelay 500
+    putStr $ mkProgressBar "Downloading" 25 size rb ++ "\r"
+    if rb /= size
+        then threadDelay 500 >> progress sinfo size
+        else return ()
 
-mkProgressBar np tp = "\r   [" ++ bar ++ spaces ++ "] " ++ (show np) ++ "%"
+mkProgressBar :: String -> Int -> Int -> Int -> String
+mkProgressBar msg width filesize rbytes =
+    printf "%s [%s%s] %d%%" msg bar spaces percentage
   where
-    bar = replicate np '#'
-    spaces = replicate (tp - np) ' '
-
-
+    bar = replicate completed '#'
+    spaces = replicate (width - completed) ' '
+    percentage = completed * 100 `div` width
+    completed = if rbytes /= filesize
+                then rbytes * width `div` filesize
+                else width
 
 mkDownloadable url cn manager = do
     initReq <- parseUrl url
@@ -80,16 +82,14 @@ mkReqs (DL url _ _ (Just ranges)) = mapM (mkReq url) ranges
 
 download url cn manager sinfo = do
     dl@(DL url filename size ranges) <- mkDownloadable url cn manager
-    mvars <- liftIO $ replicateM cn newEmptyMVar
     reqs <- mkReqs dl
-    mapM_ (\(req,fp,mvar) -> fork $ do
+    mapM_ (\(req,fp) -> fork $ do
             Response _ _ _ bsrc <- http req manager
             bsrc C.$= (conduitInfo sinfo) C.$$ (sinkFile $ CB.unpack filename++fp)
-            putMVar mvar True) $
-        zip3 reqs
+            ) $
+        zip reqs
         [".part" ++ (show x) | x <- [1..]]
-        mvars
-    return (mvars, size)
+    return size
 
 ranges n cn = cl n cs cn 0 0
   where
