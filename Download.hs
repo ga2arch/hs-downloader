@@ -49,18 +49,15 @@ import ProgressBar
 
 downloadUrl url = withManager $ \manager -> do
     dl <- mkDownloadable url 5 manager
-    liftIO . putStrLn $ "Downloading " ++ url
-    sinfo <- liftIO $ newMVar 0
-
-    chan <- liftIO $ newChan
-    download dl chan manager sinfo
+    liftIO $ putStrLn ("Downloading " ++ url)
+    chan <- liftIO newChan
+    download dl chan manager
     h <- liftIO $ openFile (CB.unpack $ dlFilename dl) WriteMode
-    liftIO $ hSetBuffering h NoBuffering
-
-    liftIO $ putStr $ mkProgressBar "Downloading" 40 (dlSize dl) 0 ++ "\r"
-
-    liftIO $ fileWriter h chan dl 0 0
-    liftIO $ putStrLn "\nDownloaded"
+    liftIO $ do
+        hSetBuffering h NoBuffering
+        putStr $ mkProgressBar "Downloading" 40 (dlSize dl) 0 ++ "\r"
+        fileWriter h chan dl 0 0
+        putStrLn "\nDownloaded"
     return ()
 
 mkDownloadable url cn manager = do
@@ -94,31 +91,31 @@ ranges n cn = cl n cs cn 0 0
 
 cl :: Int -> Int -> Int -> Int -> Int -> [(String, String)]
 cl n cs cn p t | (cn-1) == t = [(sp, sn)]
-               | otherwise = (sp, (show $ cs+p)) : cl n cs cn (cs+p+1) (t+1)
+               | otherwise = (sp, show $ cs+p) : cl n cs cn (cs+p+1) (t+1)
   where
-    sp = (show p)
-    sn = (show n)
+    sp = show p
+    sn = show n
 
 sinkFile filesize r chan = C.sinkIO
               (newMVar r)
               (const $ return ())
               (\m bs -> do
                     rb <- liftIO $ takeMVar m
-                    let nrb = rb + (CB.length bs)
+                    let nrb = rb + CB.length bs
                     liftIO $ writeChan chan (toInteger rb, bs)
                     if nrb /= filesize
-                        then (liftIO $ putMVar m nrb)
+                        then liftIO (putMVar m nrb)
                              >> return C.IOProcessing
                         else return $ C.IODone Nothing ())
               (const $ return ())
 
-download dl chan manager env = do
+download dl chan manager = do
     reqs <- mkReqs dl
     mapM_ (\(req,fp,(r,_)) -> fork $ do
             Response _ _ _ bsrc <- http req manager
             bsrc C.$$ sinkFile (dlSize dl) (read r) chan) $
         zip3 reqs
-        [".part" ++ (show x) | x <- [1..]]
+        [".part" ++ show x | x <- [1..]]
         (fromJust $ dlRanges dl)
 
 fileWriter h chan dl@(DL _ _ fsize _) total rbytes = do
@@ -133,10 +130,9 @@ fileWriter h chan dl@(DL _ _ fsize _) total rbytes = do
                   then 0
                   else rbytes + nbytes
 
-    if nrbytes == 0 || ntotal == fsize
-        then putStr $ mkProgressBar "Downloading" 40 fsize ntotal ++ "\r"
-        else return ()
+    when (nrbytes == 0 || ntotal == fsize) $
+        putStr $ mkProgressBar "Downloading" 40 fsize ntotal ++ "\r"
 
     if ntotal == fsize
-        then (hClose h) >> return ()
+        then hClose h >> return ()
         else fileWriter h chan dl ntotal nrbytes
