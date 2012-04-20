@@ -57,7 +57,6 @@ downloadUrl url = withManager $ \manager -> do
         hSetBuffering h NoBuffering
         putStr $ mkProgressBar "Downloading" 40 (dlSize dl) 0 ++ "\r"
         fileWriter h chan dl 0 0
-        putStrLn "\nDownloaded"
     return ()
 
 mkDownloadable url cn manager = do
@@ -121,19 +120,18 @@ download dl chan manager = do
 
 fileWriter h chan dl@(DL _ _ fsize _) total rbytes = do
     (pos, bs) <- readChan chan
+
     hSeek h AbsoluteSeek pos
     CB.hPut h bs
 
     let nbytes = CB.length bs
     let ntotal = total + nbytes
+    let nrbytes = if rbytes >= (fsize `div` 40) then 0 else rbytes + nbytes
+    let ppBar msg = mkProgressBar msg 40 fsize ntotal
 
-    let nrbytes = if rbytes >= (fsize `div` 40)
-                  then 0
-                  else rbytes + nbytes
-
-    when (nrbytes == 0 || ntotal == fsize) $
-        putStr $ mkProgressBar "Downloading" 40 fsize ntotal ++ "\r"
+    when (nrbytes == 0) $
+        putStr $ (ppBar "Downloading") ++ "\r"
 
     if ntotal == fsize
-        then hClose h >> return ()
+        then (putStrLn $ ppBar "Downloaded") >> hClose h >> return ()
         else fileWriter h chan dl ntotal nrbytes
