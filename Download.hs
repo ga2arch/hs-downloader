@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE FlexibleContexts #-}
 
 import Data.Conduit
 import Data.Conduit.Binary (sinkFile, conduitFile)
@@ -20,6 +19,7 @@ import System.IO
 data Downloadable = DL
              { dlUrl :: String
              , dlFilename :: CB.ByteString
+             , dlSize :: Int
              , dlRanges :: Maybe [(String, String)]
              }
            deriving (Show, Eq)
@@ -32,18 +32,28 @@ main = do
     withManager $ \manager -> do
         liftIO . putStrLn $ "Downloading " ++ url
         sinfo <- liftIO $ newSampleVar 0
-        mvars <- download url 5 manager sinfo
+        (mvars,size) <- download url 5 manager sinfo
 
-        liftIO . forkIO . forever $ do
-            rb <- readSampleVar sinfo
-            let x = rb `div` 14581350
-            putChar '\r'
-            putStr $ replicate x '#'
-            writeSampleVar sinfo rb
-            threadDelay 100
+        liftIO . forkIO . info sinfo $ size
 
         mapM (liftIO . takeMVar) mvars
-        liftIO $ putStrLn "Downloaded"
+        return ()
+
+info sinfo size = forever $ do
+    rb <- readSampleVar sinfo
+    let n = rb * 25 `div` size
+    if rb == size
+        then putStr $ mkProgressBar 25 25 ++ "\n"
+        else putStr $ mkProgressBar n 25
+    writeSampleVar sinfo rb
+    threadDelay 500
+
+mkProgressBar np tp = "\r   [" ++ bar ++ spaces ++ "] " ++ (show np) ++ "%"
+  where
+    bar = replicate np '#'
+    spaces = replicate (tp - np) ' '
+
+
 
 mkDownloadable url cn manager = do
     initReq <- parseUrl url
@@ -52,7 +62,7 @@ mkDownloadable url cn manager = do
     let (Just size) = lookup (CI.mk "content-length") hdrs
     let ranges = mkRanges size cn
     let filename = last . CB.split '/' . path $ req
-    return $ DL url filename ranges
+    return $ DL url filename (read $ CB.unpack size) ranges
 
 mkRanges "-1" _ = Nothing
 mkRanges size cn = return $ ranges (read . CB.unpack $ size) cn
@@ -65,11 +75,11 @@ mkReq url (s, f) = do
                   (CB.pack $ "bytes=" ++ s ++ "-" ++ f) : respHdrs
     return $ initReq { requestHeaders = headers }
 
-mkReqs (DL url _ Nothing) = return $ parseUrl url
-mkReqs (DL url _ (Just ranges)) = mapM (mkReq url) ranges
+mkReqs (DL url _ _ Nothing) = return $ parseUrl url
+mkReqs (DL url _ _ (Just ranges)) = mapM (mkReq url) ranges
 
 download url cn manager sinfo = do
-    dl@(DL url filename ranges) <- mkDownloadable url cn manager
+    dl@(DL url filename size ranges) <- mkDownloadable url cn manager
     mvars <- liftIO $ replicateM cn newEmptyMVar
     reqs <- mkReqs dl
     mapM_ (\(req,fp,mvar) -> fork $ do
@@ -79,7 +89,7 @@ download url cn manager sinfo = do
         zip3 reqs
         [".part" ++ (show x) | x <- [1..]]
         mvars
-    return mvars
+    return (mvars, size)
 
 ranges n cn = cl n cs cn 0 0
   where
