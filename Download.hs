@@ -26,6 +26,8 @@ data Downloadable = DL
 
 main :: IO ()
 main = do
+    hSetBuffering stdout NoBuffering
+
     url <- fmap head getArgs
     withManager $ \manager -> do
         liftIO . putStrLn $ "Downloading " ++ url
@@ -34,11 +36,11 @@ main = do
 
         liftIO . forkIO . forever $ do
             rb <- readSampleVar sinfo
-            if rb >= 14581350
-                then liftIO $ putStr "#" >> hFlush stdout >>
-                     (liftIO $ writeSampleVar sinfo 0)
-                else liftIO $ writeSampleVar sinfo rb
-            threadDelay 500
+            let x = rb `div` 14581350
+            putChar '\r'
+            putStr $ replicate x '#'
+            writeSampleVar sinfo rb
+            threadDelay 100
 
         mapM (liftIO . takeMVar) mvars
         liftIO $ putStrLn "Downloaded"
@@ -69,12 +71,12 @@ mkReqs (DL url _ (Just ranges)) = mapM (mkReq url) ranges
 download url cn manager sinfo = do
     dl@(DL url filename ranges) <- mkDownloadable url cn manager
     mvars <- liftIO $ replicateM cn newEmptyMVar
-    let reqs = mkReqs dl
+    reqs <- mkReqs dl
     mapM_ (\(req,fp,mvar) -> fork $ do
             Response _ _ _ bsrc <- http req manager
             bsrc C.$= (conduitInfo sinfo) C.$$ (sinkFile $ CB.unpack filename++fp)
             putMVar mvar True) $
-        zip3 (join reqs)
+        zip3 reqs
         [".part" ++ (show x) | x <- [1..]]
         mvars
     return mvars
