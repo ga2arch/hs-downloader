@@ -109,14 +109,19 @@ sinkFile filesize r chan =
               else return $ C.IODone Nothing ())
     (const $ return ())
 
-download dl chan manager = do
+download dl@(DL _ _ _ (Just ranges)) chan manager = do
     reqs <- mkReqs dl
-    mapM_ (\(req,fp,(r,_)) -> fork $ do
+    mapM_ (\(req,(r,_)) -> fork $ do
             Response _ _ _ bsrc <- http req manager
             bsrc C.$$ sinkFile (dlSize dl) (read r) chan) $
-        zip3 reqs
-        [".part" ++ show x | x <- [1..]]
-        (fromJust $ dlRanges dl)
+        zip reqs ranges
+
+download dl@(DL{..}) chan manager = do
+    req <- parseUrl dlUrl
+    fork $ do
+        Response _ _ _ bsrc <- http req manager
+        bsrc C.$$ sinkFile dlSize 0 chan
+    return ()
 
 fileWriter h chan dl@(DL{..}) total rbytes = do
     (pos, bs) <- readChan chan
