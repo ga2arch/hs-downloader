@@ -8,6 +8,7 @@ Maintainer:          gabriele.carrettoni@gmail.com
 Build-Type:          Simple
 Cabal-Version:       >=1.8
 Executable hdownload
+  Hs-source-dirs:    src/
   Main-is:           Main.hs
   Build-Depends:     base >= 4 && < 5
                ,     http-conduit >= 1.4.1.1
