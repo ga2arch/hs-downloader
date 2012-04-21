@@ -28,11 +28,20 @@ import Text.Printf
 
 mkProgressBar :: Int -> Int -> Int -> String
 mkProgressBar width filesize rbytes =
-    printf "%d%% [%s%s] %d" percentage bar spaces rbytes
+    printf "%d%%  [%s%s] %s   " percentage bar spaces sbytes
   where
     bar = replicate completed '#'
     spaces = replicate (width - completed) ' '
     percentage = completed * 100 `div` width
+    sbytes = (bytesConv . fromIntegral $ rbytes)
     completed = if rbytes /= filesize
                 then rbytes * width `div` filesize
                 else width
+
+fixNum num = show $ fromInteger (truncate (num * 100)) / 100
+
+bytesConv :: Double -> String
+bytesConv b | b >= 1073741824 = fixNum (b / 1073741824) ++ " GB"
+            | b >= 1048576 = fixNum (b / 1048576) ++ " MB"
+            | b >= 1024 = fixNum (b / 1024) ++ " KB"
+            | otherwise = fixNum b ++ " B"
