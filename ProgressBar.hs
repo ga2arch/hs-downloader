@@ -26,9 +26,9 @@ module ProgressBar
 
 import Text.Printf
 
-mkProgressBar :: String -> Int -> Int -> Int -> String
-mkProgressBar msg width filesize rbytes =
-    printf "%s [%s%s] %d%%" msg bar spaces percentage
+mkProgressBar :: Int -> Int -> Int -> String
+mkProgressBar width filesize rbytes =
+    printf "%d%% [%s%s] %d" percentage bar spaces rbytes
   where
     bar = replicate completed '#'
     spaces = replicate (width - completed) ' '

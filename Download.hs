@@ -21,7 +21,7 @@ SOFTWARE.
 -}
 
 
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, RecordWildCards #-}
 module Download
        (downloadUrl
        ) where
@@ -55,7 +55,7 @@ downloadUrl url = withManager $ \manager -> do
     h <- liftIO $ openFile (CB.unpack $ dlFilename dl) WriteMode
     liftIO $ do
         hSetBuffering h NoBuffering
-        putStr $ mkProgressBar "Downloading" 40 (dlSize dl) 0 ++ "\r"
+        putStr $ mkProgressBar 40 (dlSize dl) 0 ++ "\r"
         fileWriter h chan dl 0 0
     return ()
 
@@ -118,7 +118,7 @@ download dl chan manager = do
         [".part" ++ show x | x <- [1..]]
         (fromJust $ dlRanges dl)
 
-fileWriter h chan dl@(DL _ _ fsize _) total rbytes = do
+fileWriter h chan dl@(DL{..}) total rbytes = do
     (pos, bs) <- readChan chan
 
     hSeek h AbsoluteSeek pos
@@ -126,12 +126,14 @@ fileWriter h chan dl@(DL _ _ fsize _) total rbytes = do
 
     let nbytes = CB.length bs
     let ntotal = total + nbytes
-    let nrbytes = if rbytes >= (fsize `div` 40) then 0 else rbytes + nbytes
-    let ppBar msg = mkProgressBar msg 40 fsize ntotal
+    let nrbytes = if rbytes >= (dlSize `div` 40) then 0 else rbytes + nbytes
+    let ppBar as = putStr $ mkProgressBar 40 dlSize ntotal ++ as
 
     when (nrbytes == 0) $
-        putStr $ (ppBar "Downloading") ++ "\r"
+        ppBar "\r"
 
-    if ntotal == fsize
-        then (putStrLn $ ppBar "Downloaded") >> hClose h >> return ()
+    if ntotal == dlSize
+        then ppBar "\n"
+             >> hClose h
+             >> return ()
         else fileWriter h chan dl ntotal nrbytes
